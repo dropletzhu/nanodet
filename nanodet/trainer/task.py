@@ -31,6 +31,15 @@ from ..model.arch import build_model
 from ..model.weight_averager import build_weight_averager
 
 
+def get_device_memory_usage():
+    """Get memory usage for the current device (CUDA, NPU, or return 0 for CPU)."""
+    if torch.cuda.is_available():
+        return torch.cuda.memory_reserved() / 1e9
+    elif hasattr(torch, "npu") and torch.npu.is_available():
+        return torch.npu.memory_reserved() / 1e9
+    return 0
+
+
 class TrainingTask(LightningModule):
     """
     Pytorch Lightning module of a general training task.
@@ -79,9 +88,7 @@ class TrainingTask(LightningModule):
 
         # log train losses
         if self.global_step % self.cfg.log.interval == 0:
-            memory = (
-                torch.cuda.memory_reserved() / 1e9 if torch.cuda.is_available() else 0
-            )
+            memory = get_device_memory_usage()
             lr = self.trainer.optimizers[0].param_groups[0]["lr"]
             log_msg = "Train|Epoch{}/{}|Iter{}({}/{})| mem:{:.3g}G| lr:{:.2e}| ".format(
                 self.current_epoch + 1,
@@ -118,9 +125,7 @@ class TrainingTask(LightningModule):
             preds, loss, loss_states = self.model.forward_train(batch)
 
         if batch_idx % self.cfg.log.interval == 0:
-            memory = (
-                torch.cuda.memory_reserved() / 1e9 if torch.cuda.is_available() else 0
-            )
+            memory = get_device_memory_usage()
             lr = self.trainer.optimizers[0].param_groups[0]["lr"]
             log_msg = "Val|Epoch{}/{}|Iter{}({}/{})| mem:{:.3g}G| lr:{:.2e}| ".format(
                 self.current_epoch + 1,

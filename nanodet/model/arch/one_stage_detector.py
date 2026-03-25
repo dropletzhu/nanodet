@@ -46,23 +46,36 @@ class OneStageDetector(nn.Module):
         return x
 
     def inference(self, meta):
-        with torch.no_grad():
-            is_cuda_available = torch.cuda.is_available()
-            if is_cuda_available:
+        def is_device_available():
+            if torch.cuda.is_available():
+                return True
+            elif hasattr(torch, "npu") and torch.npu.is_available():
+                return True
+            return False
+
+        def device_synchronize():
+            if torch.cuda.is_available():
                 torch.cuda.synchronize()
+            elif hasattr(torch, "npu") and torch.npu.is_available():
+                torch.npu.synchronize()
+
+        with torch.no_grad():
+            is_device = is_device_available()
+            if is_device:
+                device_synchronize()
 
             time1 = time.time()
             preds = self(meta["img"])
 
-            if is_cuda_available:
-                torch.cuda.synchronize()
+            if is_device:
+                device_synchronize()
 
             time2 = time.time()
             print("forward time: {:.3f}s".format((time2 - time1)), end=" | ")
             results = self.head.post_process(preds, meta)
 
-            if is_cuda_available:
-                torch.cuda.synchronize()
+            if is_device:
+                device_synchronize()
 
             print("decode time: {:.3f}s".format((time.time() - time2)), end=" | ")
         return results

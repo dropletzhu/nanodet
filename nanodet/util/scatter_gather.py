@@ -20,6 +20,15 @@ from torch.autograd import Variable
 from torch.nn.parallel._functions import Scatter
 
 
+def get_device():
+    """Get current device (npu, cuda, or cpu)."""
+    if hasattr(torch, "npu") and torch.npu.is_available():
+        return torch.device("npu")
+    elif torch.cuda.is_available():
+        return torch.device("cuda")
+    return torch.device("cpu")
+
+
 def list_scatter(input, target_gpus, chunk_sizes):
     ret = []
     for idx, size in enumerate(chunk_sizes):
@@ -71,19 +80,21 @@ def gather_results(result_part):
         rank = dist.get_rank()
         world_size = dist.get_world_size()
 
+    device = get_device()
+
     # dump result part to tensor with pickle
     part_tensor = torch.tensor(
-        bytearray(pickle.dumps(result_part)), dtype=torch.uint8, device="cuda"
+        bytearray(pickle.dumps(result_part)), dtype=torch.uint8, device=device
     )
 
     # gather all result part tensor shape
-    shape_tensor = torch.tensor(part_tensor.shape, device="cuda")
+    shape_tensor = torch.tensor(part_tensor.shape, device=device)
     shape_list = [shape_tensor.clone() for _ in range(world_size)]
     dist.all_gather(shape_list, shape_tensor)
 
     # padding result part tensor to max length
     shape_max = torch.tensor(shape_list).max()
-    part_send = torch.zeros(shape_max, dtype=torch.uint8, device="cuda")
+    part_send = torch.zeros(shape_max, dtype=torch.uint8, device=device)
     part_send[: shape_tensor[0]] = part_tensor
     part_recv_list = [part_tensor.new_zeros(shape_max) for _ in range(world_size)]
 

@@ -30,6 +30,12 @@ def parse_args():
         action="store_true",
         help="whether to save the inference result of image/video",
     )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cuda:0",
+        help="device to use for inference (e.g., cuda:0, cpu, npu:0)",
+    )
     args = parser.parse_args()
     return args
 
@@ -99,7 +105,7 @@ def main():
 
     load_config(cfg, args.config)
     logger = Logger(local_rank, use_tensorboard=False)
-    predictor = Predictor(cfg, args.model, logger, device="cuda:0")
+    predictor = Predictor(cfg, args.model, logger, device=args.device)
     logger.log('Press "Esc", "q" or "Q" to exit.')
     current_time = time.localtime()
     if args.demo == "image":

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import argparse
 import os
 import time
 
@@ -20,7 +21,7 @@ import torch
 
 from nanodet.data.transform import Pipeline
 from nanodet.model.arch import build_model
-from nanodet.util import load_model_weight
+from nanodet.util import Logger, cfg, load_config, load_model_weight
 
 
 class Predictor(object):
@@ -68,3 +69,44 @@ class Predictor(object):
             meta["raw_img"], dets, class_names, score_thres=score_thres, show=True
         )
         print("viz time: {:.3f}s".format(time.time() - time1))
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", help="model config file path")
+    parser.add_argument("--model", help="model checkpoint file path")
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cuda:0",
+        help="device to use for inference (e.g., cuda:0, cpu, npu:0)",
+    )
+    args = parser.parse_args()
+    return args
+
+
+def main(args):
+    load_config(cfg, args.config)
+    logger = Logger(0, use_tensorboard=False)
+    predictor = Predictor(cfg, args.model, logger, device=args.device)
+
+    image_ext = [".jpg", ".jpeg", ".webp", ".bmp", ".png"]
+    if os.path.isdir(args.config):
+        files = []
+        for maindir, subdir, file_name_list in os.walk(args.config):
+            for filename in file_name_list:
+                apath = os.path.join(maindir, filename)
+                ext = os.path.splitext(apath)[1]
+                if ext in image_ext:
+                    files.append(apath)
+    else:
+        files = [args.config]
+
+    for image_name in files:
+        meta, res = predictor.inference(image_name)
+        predictor.visualize(res[0], meta, cfg.class_names, 0.35)
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    main(args)

@@ -13,10 +13,12 @@
 # limitations under the License.
 
 import collections
+import collections.abc
 import re
 
 import torch
-from torch._six import string_classes
+
+string_classes = str
 
 np_str_obj_array_pattern = re.compile(r"[SaUO]")
 

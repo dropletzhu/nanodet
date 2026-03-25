@@ -18,7 +18,10 @@ import warnings
 
 import pytorch_lightning as pl
 import torch
+from pytorch_lightning.accelerators import Accelerator
 from pytorch_lightning.callbacks import TQDMProgressBar
+from pytorch_lightning.strategies import Strategy
+from pytorch_lightning.utilities import rank_zero_only
 
 from nanodet.data.collate import naive_collate
 from nanodet.data.dataset import build_dataset
@@ -35,6 +38,112 @@ from nanodet.util import (
 )
 
 
+class NPUAccelerator(Accelerator):
+    """Accelerator for Huawei Ascend NPU devices."""
+
+    @staticmethod
+    def parse_devices(devices):
+        if isinstance(devices, int):
+            if devices == 1:
+                return [0]
+            return list(range(devices))
+        elif isinstance(devices, str):
+            if devices == "auto":
+                if hasattr(torch, "npu") and torch.npu.is_available():
+                    return list(range(torch.npu.device_count()))
+                return [0]
+            return [int(d.strip()) for d in devices.split(",")]
+        elif isinstance(devices, (list, tuple)):
+            return list(devices)
+        return [0]
+
+    @staticmethod
+    def get_parallel_devices(devices):
+        devices = NPUAccelerator.parse_devices(devices)
+        return [torch.device("npu", i) for i in devices]
+
+    def get_device_stats(self, device):
+        return {}
+
+    def setup_device(self, device):
+        pass
+
+    def teardown(self):
+        pass
+
+
+class NPUPlugin(Strategy):
+    """NPU Strategy for distributed training."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.npu_devices = []
+
+    def connect(self, model, optimizers, *args, **kwargs):
+        return model, optimizers
+
+    def setup(self, trainer):
+        pass
+
+    def on_train_start(self):
+        pass
+
+
+def register_npu_accelerator():
+    """Register NPU accelerator with PyTorch Lightning."""
+    try:
+        if hasattr(torch, "npu") and torch.npu.is_available():
+            NPUAccelerator.register_accelerators(pl.trainer.Trainer, "npu")
+            print("Registered NPU accelerator")
+    except Exception as e:
+        print(f"Could not register NPU accelerator: {e}")
+
+
+register_npu_accelerator()
+
+
+def get_device_type():
+    """Detect available device type: npu, cuda, or cpu."""
+    if hasattr(torch, "npu") and torch.npu.is_available():
+        return "npu"
+    elif torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
+
+
+def setup_device(cfg, device_type=None):
+    """Setup device, accelerator, and related settings based on device type.
+
+    Args:
+        cfg: Configuration object
+        device_type: Force specific device type, otherwise auto-detect
+
+    Returns:
+        accelerator, devices, strategy, precision
+    """
+    if device_type is None:
+        device_type = cfg.device.get("device_type", get_device_type())
+
+    if device_type == "cpu":
+        accelerator = "cpu"
+        devices = None
+        strategy = None
+        torch.backends.cudnn.enabled = False
+    elif device_type == "npu":
+        accelerator = "npu"
+        devices = cfg.device.gpu_ids if cfg.device.gpu_ids != -1 else [0]
+        strategy = None
+        torch.backends.cudnn.enabled = False
+    else:
+        accelerator = "gpu"
+        devices = cfg.device.gpu_ids if cfg.device.gpu_ids != -1 else [0]
+        strategy = None
+
+    precision = cfg.device.get("precision", 32)
+
+    return accelerator, devices, strategy, precision, device_type
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("config", help="train config file path")
@@ -42,6 +151,13 @@ def parse_args():
         "--local_rank", default=-1, type=int, help="node rank for distributed training"
     )
     parser.add_argument("--seed", type=int, default=None, help="random seed")
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        choices=["cpu", "npu", "cuda"],
+        help="Force device type (auto-detect if not specified)",
+    )
     args = parser.parse_args()
     return args
 
@@ -111,41 +227,39 @@ def main(args):
         if "resume" in cfg.schedule
         else None
     )
-    if cfg.device.gpu_ids == -1:
-        logger.info("Using CPU training")
-        accelerator, devices, strategy, precision = (
-            "cpu",
-            None,
-            None,
-            cfg.device.precision,
-        )
-    else:
-        accelerator, devices, strategy, precision = (
-            "gpu",
-            cfg.device.gpu_ids,
-            None,
-            cfg.device.precision,
-        )
 
-    if devices and len(devices) > 1:
-        strategy = "ddp"
+    device_type = args.device if args.device else cfg.device.get("device_type", None)
+    accelerator, devices, strategy, precision, device_type = setup_device(cfg, device_type)
+
+    if device_type == "npu":
+        logger.info("Using NPU training")
+    elif device_type == "cuda":
+        logger.info("Using CUDA training")
+    elif device_type == "cpu":
+        logger.info("Using CPU training")
+
+    num_devices = devices if isinstance(devices, int) else (len(devices) if devices else 0)
+
+    trainer_kwargs = {
+        "default_root_dir": cfg.save_dir,
+        "max_epochs": cfg.schedule.total_epochs,
+        "check_val_every_n_epoch": cfg.schedule.val_intervals,
+        "accelerator": accelerator,
+        "devices": devices,
+        "log_every_n_steps": cfg.log.interval,
+        "num_sanity_val_steps": 0,
+        "callbacks": [TQDMProgressBar(refresh_rate=0)],
+        "logger": logger,
+        "benchmark": cfg.get("cudnn_benchmark", True),
+        "gradient_clip_val": cfg.get("grad_clip", 0.0),
+        "precision": precision,
+    }
+
+    if num_devices > 1:
+        trainer_kwargs["strategy"] = "ddp"
         env_utils.set_multi_processing(distributed=True)
 
-    trainer = pl.Trainer(
-        default_root_dir=cfg.save_dir,
-        max_epochs=cfg.schedule.total_epochs,
-        check_val_every_n_epoch=cfg.schedule.val_intervals,
-        accelerator=accelerator,
-        devices=devices,
-        log_every_n_steps=cfg.log.interval,
-        num_sanity_val_steps=0,
-        callbacks=[TQDMProgressBar(refresh_rate=0)],  # disable tqdm bar
-        logger=logger,
-        benchmark=cfg.get("cudnn_benchmark", True),
-        gradient_clip_val=cfg.get("grad_clip", 0.0),
-        strategy=strategy,
-        precision=precision,
-    )
+    trainer = pl.Trainer(**train_kwargs)
 
     trainer.fit(task, train_dataloader, val_dataloader, ckpt_path=model_resume_path)
 

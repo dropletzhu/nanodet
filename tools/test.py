@@ -40,8 +40,26 @@ def parse_args():
     )
     parser.add_argument("--config", type=str, help="model config file(.yml) path")
     parser.add_argument("--model", type=str, help="ckeckpoint file(.ckpt) path")
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        choices=["cpu", "npu", "cuda"],
+        help="Force device type (auto-detect if not specified)",
+    )
     args = parser.parse_args()
     return args
+
+
+def get_device_type(cfg, device_arg=None):
+    """Detect available device type or use specified device."""
+    if device_arg:
+        return device_arg
+    if hasattr(torch, "npu") and torch.npu.is_available():
+        return "npu"
+    elif torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
 
 
 def main(args):
@@ -83,11 +101,17 @@ def main(args):
         ckpt = convert_old_model(ckpt)
     task.load_state_dict(ckpt["state_dict"])
 
-    if cfg.device.gpu_ids == -1:
-        logger.info("Using CPU training")
+    device_type = get_device_type(cfg, args.device)
+    if device_type == "cpu":
         accelerator, devices = "cpu", None
+        torch.backends.cudnn.enabled = False
+    elif device_type == "npu":
+        accelerator, devices = "npu", cfg.device.gpu_ids if cfg.device.gpu_ids != -1 else [0]
+        torch.backends.cudnn.enabled = False
     else:
-        accelerator, devices = "gpu", cfg.device.gpu_ids
+        accelerator, devices = "gpu", cfg.device.gpu_ids if cfg.device.gpu_ids != -1 else [0]
+
+    logger.info(f"Using {device_type.upper()} for testing")
 
     trainer = pl.Trainer(
         default_root_dir=cfg.save_dir,
