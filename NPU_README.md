@@ -306,3 +306,71 @@ python nanodet_mindspore/test_model.py
 # 训练测试
 python nanodet_mindspore/test_training.py
 ```
+
+---
+
+## MindSpore 测试结果汇总
+
+### 测试环境
+- **框架**: MindSpore 2.8.0
+- **硬件**: Ascend NPU (device_id=0)
+- **执行模式**: PYNATIVE_MODE (动态图模式)
+
+### 测试用例与结果
+
+| 测试项 | 测试文件 | 状态 | 说明 |
+|--------|----------|------|------|
+| 基础NPU测试 | test_npu.py | ✅ PASS | 模型前向、损失计算、权重保存加载 |
+| 模型测试 | test_model.py | ✅ PASS | ShuffleNetV2骨干网络、完整模型 |
+| 训练测试 | test_training.py | ✅ PASS | 完整训练循环、前向+反向+优化 |
+| 推理测试 | test_inference.py | ✅ PASS | 图像预处理、单次/批量推理 |
+
+### 详细测试结果
+
+#### 1. 骨干网络测试 (test_training.py)
+```
+ShuffleNetV2-0.5x: [(1, 48, 52, 52), (1, 96, 26, 26), (1, 192, 13, 13)] ✓
+ShuffleNetV2-1.0x: [(1, 116, 52, 52), (1, 232, 26, 26), (1, 464, 13, 13)] ✓
+ShuffleNetV2-1.5x: [(1, 176, 52, 52), (1, 352, 26, 26), (1, 704, 13, 13)] ✓
+ShuffleNetV2-2.0x: [(1, 244, 52, 52), (1, 488, 26, 26), (1, 976, 13, 13)] ✓
+```
+
+#### 2. 损失函数测试
+```
+GIoU loss: 0.6875 ✓
+```
+
+#### 3. 训练循环测试
+```
+Epoch 1: loss = 0.0106
+Epoch 2: loss = 0.0107  
+Epoch 3: loss = 0.0106
+```
+
+#### 4. 推理性能测试
+```
+10次推理耗时: 0.3764s
+平均单次推理: 37.64ms
+```
+
+#### 5. 批处理推理测试
+```
+Batch size 1: output[2] shape = (1, 704, 13, 13) ✓
+Batch size 2: output[2] shape = (2, 704, 13, 13) ✓
+Batch size 4: output[2] shape = (4, 704, 13, 13) ✓
+Batch size 8: output[2] shape = (8, 704, 13, 13) ✓
+```
+
+### 已知限制
+
+1. **FPN模块**: 在Ascend NPU上存在GE backend兼容性问题
+2. **GhostPAN模块**: 暂未完全支持，upsample操作需要特殊处理
+3. **执行模式**: 静态图(GRAPH_MODE)存在限制，建议使用动态图(PYNATIVE_MODE)
+
+### 性能参考
+
+| 测试项 | 性能 |
+|--------|------|
+| 单次推理 (416x416) | ~37ms |
+| 批处理推理 (bs=8) | ~40ms |
+| 训练迭代 | 正常 |
