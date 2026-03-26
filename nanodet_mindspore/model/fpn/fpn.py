@@ -80,9 +80,9 @@ class FPN(nn.Cell):
 
         used_backbone_levels = len(laterals)
         for i in range(used_backbone_levels - 1, 0, -1):
-            laterals[i - 1] = laterals[i - 1] + ops.interpolate(
-                laterals[i], scale_factor=2, mode="bilinear"
-            )
+            target_size = (laterals[i - 1].shape[2], laterals[i - 1].shape[3])
+            upsampled = ops.ResizeBilinearV2(laterals[i], target_size=target_size)
+            laterals[i - 1] = laterals[i - 1] + upsampled
 
         outs = [laterals[i] for i in range(used_backbone_levels)]
         return tuple(outs)

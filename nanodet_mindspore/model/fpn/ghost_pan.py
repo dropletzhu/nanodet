@@ -79,7 +79,7 @@ class GhostPAN(nn.Cell):
         num_blocks=1,
         use_res=False,
         num_extra_level=0,
-        upsample_cfg=dict(scale_factor=2, mode="bilinear"),
+        upsample_cfg=dict(scale_factor=2.0, mode="bilinear"),
         norm_cfg=dict(type="BN"),
         activation="LeakyReLU",
     ):
@@ -88,13 +88,8 @@ class GhostPAN(nn.Cell):
         assert num_blocks >= 1
         self.in_channels = in_channels
         self.out_channels = out_channels
-
+        self.upsample_scale = upsample_cfg.get("scale_factor", 2.0)
         conv = DepthwiseConvModule if use_depthwise else ConvModule
-
-        self.upsample = nn.ResizeBilinear(
-            scale_factor=upsample_cfg.get("scale_factor", 2),
-            mode=upsample_cfg.get("mode", "bilinear")
-        )
 
         self.reduce_layers = nn.CellList()
         for idx in range(len(in_channels)):
@@ -187,7 +182,7 @@ class GhostPAN(nn.Cell):
             feat_low = inputs[idx - 1]
             inner_outs[0] = feat_heigh
 
-            upsample_feat = self.upsample(feat_heigh)
+            upsample_feat = ops.interpolate(feat_heigh, scale_factor=self.upsample_scale, mode="bilinear")
 
             inner_out = self.top_down_blocks[len(self.in_channels) - 1 - idx](
                 ops.concat([upsample_feat, feat_low], axis=1)

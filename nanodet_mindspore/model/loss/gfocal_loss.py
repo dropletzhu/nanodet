@@ -17,6 +17,7 @@
 import mindspore
 import mindspore.nn as nn
 import mindspore.ops as ops
+import mindspore.numpy as np_ms
 
 
 def quality_focal_loss(pred, target, beta=2.0):
@@ -26,7 +27,7 @@ def quality_focal_loss(pred, target, beta=2.0):
     label, score = target
     pred_sigmoid = ops.sigmoid(pred)
     scale_factor = pred_sigmoid
-    zerolabel = mindspore.zeros_like(pred)
+    zerolabel = ops.zeros_like(pred)
 
     loss = ops.binary_cross_entropy_with_logits(
         pred, zerolabel, reduction="none"
