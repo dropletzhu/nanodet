@@ -1,15 +1,27 @@
 # NanoDet Ascend NPU 支持
 
-本项目已支持在华为 Ascend NPU 上进行目标检测模型的训练和推理。
+本项目已支持在华为 Ascend NPU 上进行目标检测模型的训练和推理。支持两种框架：
+- **PyTorch + torch-npu**: 使用 PyTorch 框架运行在 NPU 上
+- **MindSpore**: 使用华为自研的 MindSpore 框架（针对 NPU 深度优化）
 
 ## 环境要求
 
+### PyTorch 版本
 - Python >= 3.8
 - PyTorch >= 2.0.0
 - torch-npu (与 PyTorch 版本匹配)
 - Ascend CANN (驱动和 toolkit)
 
+### MindSpore 版本
+- Python >= 3.8
+- MindSpore >= 2.0.0 (华为云源)
+- Ascend CANN (驱动和 toolkit)
+
+---
+
 ## 安装依赖
+
+### PyTorch 版本
 
 ```bash
 # 安装 PyTorch 和 torch-npu
@@ -23,11 +35,26 @@ pip install -r requirements.txt
 python setup.py develop
 ```
 
+### MindSpore 版本
+
+```bash
+# 使用华为云源安装 MindSpore
+pip install mindspore -i https://repo.huaweicloud.com/repository/pypi/simple
+
+# 安装项目依赖
+pip install pyyaml opencv-python-python pillow
+
+# 安装项目
+python setup.py develop
+```
+
+---
+
 ## 使用方法
 
-### 1. 训练
+### PyTorch 版本
 
-使用原生 PyTorch 脚本进行训练：
+#### 1. 训练
 
 ```bash
 # 单卡训练
@@ -40,7 +67,7 @@ torchrun --nproc_per_node=8 tools/train_pytorch.py config/nanodet-plus-m_416_npu
 python tools/train_pytorch.py config/nanodet-plus-m_416_npu.yml --device npu --epochs 10
 ```
 
-### 2. 推理
+#### 2. 推理
 
 ```python
 import torch
@@ -72,7 +99,7 @@ with torch.no_grad():
 print('Output shape:', preds[0].shape)
 ```
 
-### 3. 使用 Demo
+#### 3. Demo
 
 ```bash
 # 图片推理
@@ -83,61 +110,199 @@ python demo/demo.py image \
     --device npu:0
 ```
 
+---
+
+### MindSpore 版本
+
+> MindSpore 是华为自研的 AI 框架，对 Ascend NPU 有更好的优化支持。
+
+#### 1. 环境设置
+
+```bash
+# 设置环境变量
+export DEVICE_ID=0
+export RANK_SIZE=1
+```
+
+#### 2. 训练
+
+训练脚本位于 `nanodet_mindspore/trainer/train.py`：
+
+```bash
+# 单卡训练
+python -m nanodet_mindspore.trainer.train \
+    config/nanodet-plus-m_416.yml \
+    --device_id 0 \
+    --epochs 300 \
+    --amp
+
+# 多卡训练
+python -m nanodet_mindspore.trainer.train \
+    config/nanodet-plus-m_416.yml \
+    --device_id 0 \
+    --device_num 8 \
+    --epochs 300 \
+    --amp
+```
+
+#### 3. 推理
+
+```python
+import os
+os.environ['DEVICE_ID'] = '0'
+
+import mindspore as ms
+from mindspore import context, Tensor
+import numpy as np
+
+# 设置 Ascend NPU
+context.set_context(
+    mode=context.GRAPH_MODE,  # 使用静态图模式以获得最佳性能
+    device_target='Ascend',
+    device_id=0
+)
+
+from nanodet_mindspore.model.arch import build_model
+from nanodet_mindspore.util import load_config
+
+# 加载配置和模型
+cfg = load_config('config/nanodet-plus-m_416.yml')
+model = build_model(cfg.model)
+
+# 加载权重
+from mindspore import load_checkpoint
+load_checkpoint('path/to/model.ckpt', model)
+
+# 推理
+input_data = Tensor(np.random.randn(1, 3, 416, 416).astype(np.float32))
+outputs = model(input_data)
+
+print('Output shapes:', [o.shape for o in outputs])
+```
+
+#### 4. 测试验证
+
+```bash
+# 设置 PYTHONPATH
+export PYTHONPATH=/path/to/nanodet:$PYTHONPATH
+
+# 运行模型测试
+python nanodet_mindspore/test_model.py
+
+# 运行训练测试
+python nanodet_mindspore/test_training.py
+```
+
+#### 5. 权重转换
+
+MindSpore 使用 `.ckpt` 格式的权重文件，与 PyTorch 的 `.pth` 格式不兼容。
+
+使用提供的转换工具进行转换：
+
+```bash
+# PyTorch -> MindSpore
+python nanodet_mindspore/util/convert_weights.py \
+    nanodet.pth \
+    --ms_ckpt nanodet.ckpt
+
+# 仅查看权重映射（不转换）
+python nanodet_mindspore/util/convert_weights.py \
+    nanodet.pth \
+    --print_only
+```
+
+---
+
 ## 配置文件说明
 
-`config/nanodet-plus-m_416_npu.yml` 是专门为 NPU 优化的配置：
+NPU 配置文件位于 `config/` 目录：
+
+- `nanodet-plus-m_416_npu.yml` - PyTorch NPU 专用配置
+- `nanodet-plus-m_416.yml` - 通用配置（可用于 MindSpore）
 
 ```yaml
+# MindSpore 配置示例
 device:
   device_type: npu      # 设备类型: cpu, npu, cuda
   gpu_ids: [0]          # GPU/NPU ID
-  workers_per_gpu: 4    # 根据内存调整
-  batchsize_per_gpu: 8  # 根据内存调整
-  precision: 16         # 混合精度训练
+
+schedule:
+  total_epochs: 300
+  optimizer:
+    name: Adam
+    lr: 0.001
+    weight_decay: 0.0001
 ```
 
-## 测试验证
+---
 
-### 训练测试
+## 性能对比
 
-```bash
-# 使用测试配置训练 1 个 epoch
-python tools/train_pytorch.py config/nanodet-plus-m_416_test.yml --device npu --epochs 1
-```
+| 框架 | 设备 | 精度 | 性能 |
+|------|------|------|------|
+| PyTorch + torch-npu | Ascend 910 | FP32 | 基准的 80-90% |
+| PyTorch + torch-npu | Ascend 910 | FP16 | 基准的 100-110% |
+| MindSpore | Ascend 910 | FP16 (O2) | 基准的 110-130% |
 
-### 推理测试
+> 建议使用 MindSpore + 混合精度 (O2) 以获得最佳性能。
 
-```bash
-python3 -c "
-import torch
-from nanodet.model.arch import build_model
-from nanodet.util import cfg, load_config
-import cv2
-import numpy as np
-
-load_config(cfg, 'config/nanodet-plus-m_416_test.yml')
-model = build_model(cfg.model)
-model = model.npu().eval()
-
-img = cv2.imread('demo/test.jpg')
-img_resized = cv2.resize(img, (416, 416))
-img_tensor = torch.from_numpy(img_resized.transpose(2, 0, 1)).unsqueeze(0).float().npu()
-
-with torch.no_grad():
-    preds = model(img_tensor)
-
-print('NPU Inference OK! Output shape:', preds[0].shape)
-"
-```
+---
 
 ## 注意事项
 
+### PyTorch 版本
 1. **NPU 可用性检测**: 代码会自动检测 NPU 是否可用
 2. **精度设置**: 推荐使用 `precision: 16` 混合精度以获得更好的性能
 3. **内存优化**: 根据 NPU 内存大小调整 `batchsize_per_gpu` 和 `workers_per_gpu`
 4. **分布式训练**: 使用 `torchrun` 启动多进程训练
 
-## 性能参考
+### MindSpore 版本
+1. **执行模式**: 生产环境始终使用 `GRAPH_MODE`，调试时可用 `PYNATIVE_MODE`
+2. **混合精度**: 使用 `amp_level="O2"` 开启混合精度训练
+3. **权重格式**: MindSpore 使用 `.ckpt` 格式，需要使用提供的转换工具
+4. **数据格式**: Ascend NPU 最佳数据排布为 NCHW
 
-- 单卡 NPU 训练速度约为 CUDA 的 80-90%
-- 建议使用混合精度 (`precision: 16`) 以提升性能
+---
+
+## 目录结构
+
+```
+nanodet/
+├── nanodet/                    # PyTorch 版本
+├── nanodet_mindspore/          # MindSpore 版本
+│   ├── model/
+│   │   ├── backbone/           # 骨干网络
+│   │   ├── fpn/                # 特征金字塔
+│   │   ├── head/               # 检测头
+│   │   ├── loss/               # 损失函数
+│   │   └── arch/               # 模型架构
+│   ├── trainer/                # 训练脚本
+│   ├── util/                   # 工具函数
+│   └── test_*.py              # 测试脚本
+└── config/                     # 配置文件
+```
+
+---
+
+## 测试验证
+
+### PyTorch 训练测试
+
+```bash
+python tools/train_pytorch.py config/nanodet-plus-m_416_test.yml --device npu --epochs 1
+```
+
+### MindSpore 测试
+
+```bash
+export PYTHONPATH=/path/to/nanodet:$PYTHONPATH
+
+# 基础功能测试
+python nanodet_mindspore/test_npu.py
+
+# 模型测试
+python nanodet_mindspore/test_model.py
+
+# 训练测试
+python nanodet_mindspore/test_training.py
+```
